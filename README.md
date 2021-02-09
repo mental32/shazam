@@ -1,2 +1,3 @@
 # shazam
-A small shell written in x86_64 assembly
+
+Messed around with LLVM IR and wrote a shell.
