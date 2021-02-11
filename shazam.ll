@@ -6,6 +6,8 @@
 
 declare %libc.File* @fdopen(i32, i8*)
 
+declare i64 @fclose(%libc.File*)
+
 declare dso_local void @puts(i8*)
 
 declare dso_local void @fputs(i8*, %libc.File*)
@@ -13,6 +15,10 @@ declare dso_local void @fputs(i8*, %libc.File*)
 declare dso_local void @fflush(%libc.File*)
 
 declare dso_local i64 @feof(%libc.File*)
+
+declare dso_local i64 @getline(i8**, i64*, %libc.File*)
+
+declare dso_local i64 @strlen(i8*)
 
 declare dso_local void @exit(i32)
 
@@ -25,7 +31,7 @@ declare void @llvm.memcpy.p0i8.p0i8.i64(i8* noalias nocapture writeonly, i8* noa
 
 attributes #3 = { argmemonly nofree nosync nounwind willreturn }
 
-; -- local definitions
+; -- various string constants
 
 @shazam.prompt = private unnamed_addr constant [3 x i8] c"$ \00"
 
@@ -48,8 +54,6 @@ attributes #3 = { argmemonly nofree nosync nounwind willreturn }
     i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.append      , i32 0, i32 0), ; 4
     i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.append_read , i32 0, i32 0)  ; 5
 ], align 16
-
-%struct.IO = type { %libc.File*, %libc.File*, %libc.File* }
 
 ; -- Vec<T>
 
@@ -154,7 +158,7 @@ Write:
 
 ; -- functions
 
-define private %libc.File* @open(i32 %fd, i64 %mode) {
+define internal %libc.File* @open(i32 %fd, i64 %mode) {
     %1 = getelementptr inbounds [6 x i8*], [6 x i8*]* @.modes, i64 0, i64 0
     %2 = getelementptr inbounds i8*, i8** %1, i64 %mode
     %3 = load i8*, i8** %2
@@ -164,7 +168,7 @@ define private %libc.File* @open(i32 %fd, i64 %mode) {
     ret %libc.File* %4
 }
 
-define private void @unreachable() {
+define internal void @unreachable() {
     %1 = call %libc.File* @open(i32 2, i64 2) ; fd=stderr mode="w"
     %2 = bitcast [28 x i8]* @.str.unreachable to i8*
 
@@ -175,24 +179,68 @@ define private void @unreachable() {
     ret void
 }
 
+define internal i8* @input(i8* %prompt, %libc.File* %stdin, %libc.File* %stdout) {
+    call void @fputs(i8* %prompt, %libc.File* %stdout)
+    call void @fflush(%libc.File* %stdout)
+
+    %1 = alloca i8*
+    store i8* null, i8** %1
+
+    %2 = alloca i64
+    store i64 0, i64* %2
+
+    %3 = call i64 @getline(i8** %1, i64* %2, %libc.File* %stdin)
+
+    %4 = icmp eq i64 %3, -1
+
+    br i1 %4, label %Err, label %Ok
+Ok:
+    %5 = load i8*, i8** %1
+    ret i8* %5
+Err:
+    %6 = call i64 @feof(%libc.File* %stdin)
+    %7 = icmp eq i64 %6, 0
+
+    br i1 %7, label %Abort, label %Eof
+Eof:
+    br label %Abort
+Abort:
+    %8 = phi i32 [ 0, %Eof ], [ 1, %Err ]
+    call void @exit(i32 %8)
+    ret i8* null
+}
+
+define internal void @execute(i8* %string) {
+    ; * strtok string into Vec
+    ; * check for builtin commands
+    ; * fork and then execvp(tokens)
+    ret void
+}
+
 define dso_local i64 @main() {
-    ; %1 = alloca %struct.VecT
-    ; call i8* @VecT_with_capacity(%struct.VecT* %1, i64 8, i64 8)
+    %stdin = call %libc.File* @open(i32 0, i64 0); fd=stdin mode=read
+    %stdout = call %libc.File* @open(i32 1, i64 3); fd=stdin mode=write
 
-    ; %3 = alloca i64
-    ; store i64 0, i64* %3
-    ; %4 = bitcast i64* %3 to i8*
+    %prompt = bitcast [3 x i8]* @shazam.prompt to i8*
 
-    ; call i1 @VecT_push(%struct.VecT* %1, i8* %4, i64 8)
-    ; call i8* @VecT_pop(%struct.VecT* %1, i64 8)
+    br label %LoopHead
+LoopHead:
+    %string = call i8* @input(i8* %prompt, %libc.File* %stdin, %libc.File* %stdout)
+    %n = call i64 @strlen(i8* %string)
 
-    ; %a = getelementptr inbounds %struct.VecT, %struct.VecT* %1, i32 0, i32 1
-    ; %b = load i64, i64* %a
+    ; the length includes the CR/LF which is always there
+    ; so when `strlen(string) == 1` then it's an empty string.
+    %is_empty = icmp eq i64 %n, 1 
 
-    ; %c = getelementptr inbounds %struct.VecT, %struct.VecT* %1, i32 0, i32 0
-    ; %d = load i8*, i8** %c
+    br i1 %is_empty, label %Exit, label %LoopTail
+LoopTail:
+    call void @execute(i8* %string)
+    call void @free(i8* %string)
+    br label %LoopHead
+Exit:
+    call i64 @fclose(%libc.File* %stdin)
+    call i64 @fclose(%libc.File* %stdout)
+    call void @free(i8* %string)
 
-    ; call void @free(i8* %d)
-
-    ret i64 420
+    ret i64 0
 }
