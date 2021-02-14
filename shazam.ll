@@ -392,7 +392,7 @@ LoopHead:
     ; so when `strlen(string) == 1` then it's an empty string.
     %is_empty = icmp eq i64 %n, 1 
 
-    br i1 %is_empty, label %Exit, label %LoopTail
+    br i1 %is_empty, label %LoopHead, label %LoopTail
 LoopTail:
     call void @execute(i8* %string)
     call void @free(i8* %string)
