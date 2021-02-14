@@ -13,3 +13,5 @@ Now if you want to write some low level non-platform specific logic I think it d
 I originally wanted to write this shell using x86 assembly so I thought of the name: "sh" + "asm" -> "shazam"
 
 Check out the first commit if you don't believe me.
+
+[![asciicast](https://asciinema.org/a/iRbZdGXzDMFYT9pTOFI5I2K0e.png)](https://asciinema.org/a/iRbZdGXzDMFYT9pTOFI5I2K0e)
