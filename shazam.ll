@@ -47,7 +47,7 @@ attributes #3 = { argmemonly nofree nosync nounwind willreturn }
 
 @shazam.prompt = private unnamed_addr constant [3 x i8] c"$ \00"
 
-@.builtin.exit = private unnamed_addr constant [6 x i8] c"exit\0A\00"
+@.builtin.exit = private unnamed_addr constant [5 x i8] c"exit\00"
 
 @.str.unreachable = private unnamed_addr constant [28 x i8] c"Entered unreachable code...\00"
 
@@ -278,7 +278,7 @@ Exit:
 
 define internal i1 @try_exec_builtin(i8* %token) {
 TryExit:
-    %str.exit = bitcast [6 x i8]* @.builtin.exit to i8*
+    %str.exit = bitcast [5 x i8]* @.builtin.exit to i8*
 
     %0 = call i64 @strcmp(i8* %token, i8* %str.exit)
     %1 = icmp eq i64 0, %0
