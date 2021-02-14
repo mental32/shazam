@@ -20,6 +20,18 @@ declare dso_local i64 @getline(i8**, i64*, %libc.File*)
 
 declare dso_local i64 @strlen(i8*)
 
+declare dso_local i8* @strtok(i8*, i8*)
+
+declare dso_local i64 @strcmp(i8*, i8*)
+
+declare dso_local i32 @fork()
+
+declare dso_local i32 @execvp(i8*, i8**)
+
+declare dso_local i32 @waitpid(i32, i32*, i32)
+
+declare dso_local void @perror(i8*)
+
 declare dso_local void @exit(i32)
 
 declare dso_local i8* @malloc(i64)
@@ -35,7 +47,11 @@ attributes #3 = { argmemonly nofree nosync nounwind willreturn }
 
 @shazam.prompt = private unnamed_addr constant [3 x i8] c"$ \00"
 
+@.builtin.exit = private unnamed_addr constant [6 x i8] c"exit\0A\00"
+
 @.str.unreachable = private unnamed_addr constant [28 x i8] c"Entered unreachable code...\00"
+
+@.str.delims = private unnamed_addr constant [3 x i8] c" \0A\00"
 
 @.str.read_only  = private unnamed_addr constant [2 x i8] c"r\00"
 @.str.read_write = private unnamed_addr constant [3 x i8] c"r+\00"
@@ -116,7 +132,20 @@ Some:
     ret i8* %11
 }
 
-define internal i1 @VecT_push(%struct.VecT* %0, i8* %1, i64 %size) {
+define internal i8* @VecT_get_unchecked(%struct.VecT* %0, i64 %index, i64 %size) {
+    %2 = getelementptr inbounds %struct.VecT, %struct.VecT* %0, i32 0, i32 0
+    %3 = load i8*, i8** %2
+
+    %4 = mul i64 %index, %size
+    %5 = ptrtoint i8* %3 to i64
+
+    %6 = add i64 %5, %4
+    %7 = inttoptr i64 %6 to i8*
+
+    ret i8* %7
+}
+
+define internal void @VecT_push(%struct.VecT* %0, i8* %1, i64 %size) {
     %3 = getelementptr inbounds %struct.VecT, %struct.VecT* %0, i32 0, i32 1
     %4 = load i64, i64* %3
 
@@ -153,7 +182,7 @@ Write:
     %18 = add i64 %4, 1
     store i64 %18, i64* %3
 
-    ret i1 false
+    ret void
 }
 
 ; -- functions
@@ -210,10 +239,141 @@ Abort:
     ret i8* null
 }
 
+define internal void @tokenize(i8* %string, %struct.VecT* %tokens) {
+    %1 = alloca i64
+    %2 = call i8* @VecT_with_capacity(%struct.VecT* %tokens, i64 8, i64 8)
+
+    %3 = icmp eq i8* null, %2
+
+    br i1 %3, label %OOM, label %Parse
+OOM:
+    call void @exit(i32 2)
+    ret void
+Parse:
+    %delims = bitcast [3 x i8]* @.str.delims to i8*
+
+    %t.head = call i8* @strtok(i8* %string, i8* %delims)
+
+    %4 = ptrtoint i8* %t.head to i64
+    store i64 %4, i64* %1
+    %5 = bitcast i64* %1 to i8*
+
+    br label %ParseOne
+ParseOne:
+    %token = phi i8* [ %t.head, %Parse ], [ %t.last, %ParseOne ]
+
+    %6 = ptrtoint i8* %token to i64
+    store i64 %6, i64* %1
+    %7 = bitcast i64* %1 to i8*
+
+    call void @VecT_push(%struct.VecT* %tokens, i8* %7, i64 8)
+
+    %t.last = call i8* @strtok(i8* null, i8* %delims)
+
+    %8 = icmp eq i8* %t.last, null
+    br i1 %8, label %Exit, label %ParseOne
+Exit:
+    ret void
+}
+
+define internal i1 @try_exec_builtin(i8* %token) {
+TryExit:
+    %str.exit = bitcast [6 x i8]* @.builtin.exit to i8*
+
+    %0 = call i64 @strcmp(i8* %token, i8* %str.exit)
+    %1 = icmp eq i64 0, %0
+
+    br i1 %1, label %Exit, label %Default
+Exit:
+    call void @exit(i32 0)
+    br label %Default
+Default:
+    ret i1 false
+}
+
+define internal void @spawnvp_pwait(%struct.VecT* %tokens) {
+    %pid = alloca i32
+    %status = alloca i32, align 4
+
+    %1 = call i32 @fork()
+
+    %2 = icmp eq i32 %1, 0
+
+    br i1 %2, label %Child, label %Parent
+Child:
+    %3 = call i8* @VecT_get_unchecked(%struct.VecT* %tokens, i64 0, i64 8)
+
+    %a = bitcast i8* %3 to i64*
+    %b = load i64, i64* %a 
+    %c = inttoptr i64 %b to i8*
+
+    %argv = bitcast i8* %3 to i8**
+
+    %_ = call i32 @execvp(i8* %c, i8** %argv)
+
+    call void @perror(i8* null)
+    call void @exit(i32 1)
+
+    br label %Return
+Parent:
+    %4 = call i32 @waitpid(i32 %1, i32* %status, i32 2)
+    store i32 %4, i32* %status, align 4
+    br label %CheckExited
+CheckExited:
+    %5 = load i32, i32* %status, align 4
+    %6 = and i32 %5, 127
+    %7 = icmp eq i32 %6, 0
+    %8 = xor i1 %7, true
+    br i1 %8, label %Return, label %Parent
+
+; CheckSignaled:
+;   %31 = load i32, i32* %5, align 4, !dbg !62
+;   %32 = and i32 %31, 127, !dbg !62
+;   %33 = add nsw i32 %32, 1, !dbg !62
+;   %34 = trunc i32 %33 to i8, !dbg !62
+;   %35 = sext i8 %34 to i32, !dbg !62
+;   %36 = ashr i32 %35, 1, !dbg !62
+;   %37 = icmp sgt i32 %36, 0, !dbg !62
+;   %38 = xor i1 %37, true, !dbg !63
+;   br label %39
+Return:
+    ret void
+}
+
 define internal void @execute(i8* %string) {
-    ; * strtok string into Vec
-    ; * check for builtin commands
+    %tokens = alloca %struct.VecT
+
+    call void @tokenize(i8* %string, %struct.VecT* %tokens)
+
+    %sentinel = alloca i8*
+    store i8* null, i8** %sentinel
+    %xx = bitcast i8** %sentinel to i8*
+
+    call void @VecT_push(%struct.VecT* %tokens, i8* %xx, i64 8)
+
+    ; Check if it's a builtin command and go from there.
+    ;
+    ; >> tokens.get_unchecked(0) as *const i8 // where tokens: Vec<i64>
+    ; // it's also worth noting the resultant byte pointer is a CString...
+    %addr = call i8* @VecT_get_unchecked(%struct.VecT* %tokens, i64 0, i64 8)
+
+    %1 = bitcast i8* %addr to i64*
+    %2 = load i64, i64* %1 
+    %3 = inttoptr i64 %2 to i8*
+
+    %4 = call i1 @try_exec_builtin(i8* %3)
+
+    br i1 %4, label %Exit, label %ForkExec
+ForkExec:
     ; * fork and then execvp(tokens)
+    call void @spawnvp_pwait(%struct.VecT* %tokens)
+    br label %Exit
+Exit:
+    %buf_ptr = getelementptr inbounds %struct.VecT, %struct.VecT* %tokens, i32 0, i32 0
+    %buf = load i8*, i8** %buf_ptr
+
+    call void @free(i8* %buf)
+
     ret void
 }
 
